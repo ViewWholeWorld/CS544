@@ -1,0 +1,434 @@
+\documentclass[10pt,draftclsnofoot,journal,compsoc,onecolumn]{IEEEtran}
+
+\usepackage[margin=0.75in]{geometry}
+\usepackage{graphicx}
+\usepackage{enumerate}
+\usepackage{amssymb}
+\usepackage{listings}
+\usepackage{titling}
+\usepackage{xcolor}
+\usepackage{indentfirst}
+
+\definecolor{mGreen}{rgb}{0,0.6,0}
+\definecolor{mGray}{rgb}{0.5,0.5,0.5}
+\definecolor{mPurple}{rgb}{0.58,0,0.82}
+\definecolor{backgroundColour}{rgb}{0.95,0.95,0.92}
+\lstdefinestyle{CStyle}{  
+	commentstyle=\color{mGreen},
+	keywordstyle=\color{magenta},
+	numberstyle=\tiny\color{mGray},
+	stringstyle=\color{mPurple},
+	basicstyle=\footnotesize,
+	breakatwhitespace=false,         
+	breaklines=true,                 
+	captionpos=b,                    
+	keepspaces=true,                 
+	numbers=left,                    
+	numbersep=5pt,                  
+	showspaces=false,                
+	showstringspaces=false,
+	showtabs=false,                  
+	tabsize=2,
+	language=C
+}
+
+% Title
+\title{HW 3: \\
+	Implementing a Sysfs Interface to The VMCS}
+\author{
+	Jingwei Wu \hspace{1cm}
+	\and
+	Nobuhiro Suga \hspace{1cm}
+	\and
+	Po-Ying Chao
+}
+\date{June 13th, 2018}
+
+\begin{document}
+	\begin{titlepage} 
+		\maketitle
+		\begin{center}
+			CS544\\
+			Operating Systems II\\
+			(Spring 2018)
+			\vspace{50 mm}
+		\end{center}
+		
+		% Abstract
+		\begin{abstract}
+			The VMCS is the virtual machine control structure. It is used to manage and track the virtual CPU in the VMX/KVM layer of the kernel. This article will introduce the VMCS and our design.
+		\end{abstract}
+	\end{titlepage}
+	
+	% Begin text
+	\section{What is VMCS}
+	VMCS is short for the virtual machine control structure and VMCS is defined for VMX operation which is use for support virtualization. \cite{2}VMX operation has two kinds of operation: VMX root operation and VMX non-root operation. A logical processor may maintain any number of active VMCSs. At any given time, one is the current VMCS:
+	
+	\begin{itemize}
+		\item Software makes a VMCS active by executing VMPTRLD with the address of the VMCS. The processor may optimize VMX operation by maintaining the state of an active VMCS in memory, on the processor, or both. Software should not make a VMCS active on more than one logical processor. Software makes a VMCS inactive by executing VMCLEAR with the address of the VMCS. A logical processor does not use an inactive VMCS or maintain its state on the processor. 
+		\item Software makes a VMCS current by executing VMPTRLD with the address of the VMCS; that address is loaded into the current-VMCS pointer. VMX instructions VMLAUNCH, VMPTRST, VMREAD, VMRESUME, and VMWRITE operate on the current VMCS. A VMCS remains current
+		until either software executes VMPTRLD with the address of a different VMCS (which then becomes the current VMCS) or software executes VMCLEAR with the address of the current VMCS (after which there is no current VMCS).
+	\end{itemize}
+	
+	\section{VMCS Region}
+	VMCS region is a region in memory which associates a logical processor with every VMCS. The specific VMCS referenced by software is using the 64-bit physical address of the region. \cite{2}A VMCS region comprises up to 4-KBytes. The first 32 bits of the VMCS region contain the VMCS revision identifier. Processors that maintain VMCS data in different formats use different VMCS revision identifiers. These identifiers enable software to avoid using a VMCS
+	region formatted for one processor on a processor that uses a different format. Software should write the VMCS revision identifier to the VMCS region before using that region for a VMCS.
+	
+	\section{VMCS Data}
+	VMCS data has six logical groups:
+	
+	\begin{enumerate}
+		\item Guest-state area which saves process state when VM exits and loaded from there when VM entries.
+		\item Host-state area where process state is loaded.
+		\item VM-execution control fields which controls processor behavior in VMX non-root operation.
+		\item VM-exit control fields which control VM exits.
+		\item VM-entry control fields which control VM entries.
+		\item VM-exit information fields which receive information on VM exits and describe the reason and the nature of VM exits. They are read-only.
+	\end{enumerate}
+	
+	\section{Guest-State Area}
+	There are two kinds of guest state. One is guest register state. Another is guest non-register state. The difference of these is whether the information in these fields is about processor registers or not.
+	
+	\subsection{Guest Register State}
+	The following fields in the guest-state area correspond to processor registers:
+	
+	\begin{itemize}
+		\item Control registers CR0, CR3, and CR4 (64 bits each; 32 bits on processors that do not support Intel 64 architecture).
+		\item Debug register DR7 (64 bits; 32 bits on processors that do not support Intel 64 architecture).
+		\item RSP, RIP, and RFLAGS (64 bits each; 32 bits on processors that do not support Intel 64 architecture).
+		\item The following fields for each of the registers CS, SS, DS, ES, FS, GS,LDTR, and TR:
+		
+		\begin{itemize}
+			\item Selector (16 bits)
+			\item Base address (64 bits; 32 bits on processors that do not support Intel
+			64 architecture). The base-address fields for CS, SS, DS, and ES have only 32 architecturally-defined bits; nevertheless, the corresponding VMCS fields have 64 bits on processors that support Intel 64 architecture.
+			\item Segment limit (32 bits). The limit field is always a measure in bytes.
+			\item Access rights (32 bits). The format of this field is given in Table 20-2 and detailed as follows:
+		\end{itemize}
+		
+		\item The following fields for each of the registers GDTR and IDTR:
+		
+		\begin{itemize}
+			\item Base address (64 bits; 32 bits on processors that do not support Intel
+			64 architecture).
+			\item Limit (32 bits). The limit fields contain 32 bits even though these
+			fields are specified as only 16 bits in the architecture.
+		\end{itemize}
+		
+		\item The register SMBASE (32 bits). This register contains the base address
+		of the logical processor’s SMRAM image.
+	\end{itemize}
+	
+	\subsection{Guest Non-Register State}
+	The following fields in the guest-state area not correspond to processor registers.
+	
+	\begin{itemize}
+		\item Activity state (32 bits). This field identifies the logical processor’s activity state. When a logical processor is executing instructions normally, it is in the active state. Execution of certain instructions and the occurrence of certain events may cause a logical processor to transition to an inactive state in which it ceases to execute instructions. The following activity states are defined:
+		
+		\begin{itemize}
+			\item 0: Active. The logical processor is executing instructions normally.
+			\item 1: HLT. The logical processor is inactive because it executed the HLT instruction.
+			\item 2: Shutdown. The logical processor is inactive because it incurred a triple fault1 or some other serious error.
+			\item 3: Wait-for-SIPI. The logical processor is inactive because it is waiting for a startup-IPI (SIPI).
+		\end{itemize}
+		
+		\item Interruptibility state (32 bits). The IA-32 architecture includes features that permit certain events to be blocked for a period of time. For example, execution of STI with RFLAGS.IF = 0 blocks interrupts (and, optionally, other events) for one instruction after its execution. Another example is that execution of a MOV to SS or a POP to SS blocks interrupts for one instruction after its execution. This field contains information about such blocking.
+		\item Pending debug exceptions. IA-32 processors may recognize one or more debug exceptions without immediately delivering them.
+		\item VMCS link pointer (64 bits). This field is included for future expansion. Software should set this field to FFFFFFFF FFFFFFFFH to avoid VMentry failures.
+	\end{itemize}
+	
+	\section{Host-State Area}
+	Processor state is loaded from these fields on every VM exit. Host-state area correspond to processor registers:
+	
+	\begin{itemize}
+		\item CR0, CR3, and CR4 (64 bits each; 32 bits on processors that do not
+		support Intel 64 architecture).
+		\item RSP and RIP (64 bits each; 32 bits on processors that do not support
+		Intel 64 architecture).
+		\item Selector fields (16 bits each) for the segment registers CS, SS, DS, ES,
+		FS, GS, and TR. There is no field in the host-state area for the LDTR
+		selector.
+		\item Base-address fields for FS, GS, TR, GDTR, and IDTR (64 bits each; 32
+		bits on processors that do not support Intel 64 architecture).
+	\end{itemize}
+	
+	\section{VM-Execution Control Fields}
+	VM-execution control fields is to manage the non-root operation.
+	
+	\subsection{Pin-Based VM-Execution Controls}
+	The pin-based VM-execution controls form a 32-bit vector which controls the processing of asynchronous events.
+	
+	\subsection{Processor-Based VM-Execution Controls}
+	The processor-based VM-execution controls form two 32-bit vectors which control the processing of synchronous events, mainly those caused by the execution of specific instructions. One vector is primary processor-based VM-execution controls. Another is secondary processor-based VM-execution controls.
+	
+	\subsection{Exception Bitmap}
+	The exception bitmap is a 32-bit field that contains one bit for each exception. The vector is used to select a bit in this field when an exception occurs. If the bit is 1, the exception leads to  a VM exit. If the bit is 0, the exception is delivered normally through the IDT which is using the descriptor corresponding to the exception’s vector.
+	
+	\subsection{I/O-Bitmap Addresses}
+	The VM-execution control fields include the 64-bit physical addresses of I/O bitmaps A and B (each of which are 4 KBytes in size). I/O bitmap A contains one bit for each I/O port in the range 0000H through 7FFFH; I/O bitmap B contains bits for ports in the range 8000H through FFFFH.
+	
+	\subsection{Time-Stamp Counter Offset}
+	The VM-execution control fields include a 64-bit TSC-offset field. If the ”RDTSC exiting” control is 0 and the ”use TSC offsetting” control is 1, this field controls executions of the RDTSC and RDTSCP instructions. It also controls executions of the RDMSR instruction which read from the IA32 TIME STAMP COUNTER MSR.
+	
+	\subsection{Guest/Host Masks and Read Shadows for CR0 and CR4}
+	The VM-execution control fields include guest/host masks and read shadows for the CR0 and CR4 registers. These fields control executions of instructions that access those registers. In all the cases, the signed value of the TSC offset is consisted of the contents of the time-stamp counter (using signed addition) and the sum is reported to guest software in EDX:EAX.
+	
+	\subsection{CR3-Target Controls}
+	There are 4 CR3-target values and a CR3-target count. The CR3-target values each have 64 bits on processors that support Intel 64 architecture and 32 bits on processors that do not. The CR3-target count has 32 bits on all processors.
+	
+	\subsection{Executive-VMCS Pointer}
+	The executive-VMCS pointer is a 64-bit field used in the dual-monitor treatment of system-management interrupts (SMIs) and system-management mode (SMM).
+	
+	\subsection{Virtual-Processor Identifier (VPID)}
+	The virtual-processor identifier (VPID) is a 16-bit field. It exists only on processors which support the 1-setting of the ”enable VPID” VM-execution control.
+	
+	\subsection{Controls for PAUSE-Loop Exiting}
+	On processors that support the 1-setting of the ”PAUSE-loop exiting” VM-execution control, the VM-execution control fields include the following 32-bit fields:
+	
+	\begin{itemize}
+		\item PLE Gap. Software can configure this field as an upper bound on the amount of time between two successive executions of PAUSE in a loop.
+		\item PLE Window. Software can configure this field as an upper bound on the amount of time a guest is allowed to execute in a PAUSE loop.
+	\end{itemize}
+	
+	\section{Design of Patch}
+	In order to make the sysfs interface as a module and control it at the config of linux kernel, we need to modify the config file which located in /arch/x86/kvm/Kconfig like this:
+	
+	\begin{itemize}
+		\item config VMCS\_SYSFS
+		\item tristate $"ENABLE VMCS SYSFS$"
+		\item depends on KVM \&\& TRACEPOINTS
+	\end{itemize}
+	
+	In order to manipulate the fields of the VMCS, and we must represent each field as a file in the VMCS-related SysFS directory. We can use Kobject to implement the fields that manipulate the VMCS. Kobject is defined in linux\textbackslash kobject.h. It provides basic functionality such as reference counting, names, and parent pointers, so you can create object hierarchies.
+	
+	Sysfs is a ram-based filesystem initially based on ramfs. It provides a means to export kernel data structures, their attributes, and the linkages between them to userspace. Sysfs is a file system that represents the device driver model. Its directory hierarchy actually reflects the level of objects\cite{3}. To accommodate this directory, Linux specifically provides two structures as skeletons of sysfs. They are struct kobject and struct kset. We know that sysfs is completely virtual. Each directory of it actually corresponds to a kobject. To know which subdirectories are under this directory, kset is used. From an object-oriented perspective, kset inherits the functionality of kobject, which can represent a directory in sysfs, as well as a lower directory. Under \textbackslash sys is some directory about sysfs\cite{3}:
+	
+	\begin{itemize}
+		\item Block directory: contains all block devices.
+		\item Devices directory: Contains all of the device of system, and organized into a hierarchy according to the type of device attached bus. 
+		\item Bus directory: Contains all system bus types.
+		\item Drivers directory: Includes all registered kernel device driver.
+		\item Class directory: system device type.
+		\item Kernel directory: kernel includes the kernel configuration option and state information.
+	\end{itemize}
+	
+	The most important directory is devices, this directory export the device module into user-space. 
+	
+	\begin{enumerate}
+		\item Add and delete kobject from sysfs: Only initialized kobjects cannot be exported to sysfs. If you want to export kobject to sysfs. We need the function kobject\_add(). Normally, one or both of parent and kset should be set correctly before calling kobject\_add(). The helper functions kobject\_create() and kobject\_add() combine the work of kobject\_create() and kobject\_add() into one function.
+		\item Add file into sysfs: Kobjects map to directories, and the complete object hierarchy maps to the complete sysfs structure. Sysfs is a tree without file to provide actual data. Here we have some controls for attributes\cite{4}:
+	\end{enumerate}
+	
+	\begin{itemize}
+		\item Default attributes: The default file class is provided through the kobject and kset fields. Therefore, all kobjects with the same type have the same default file class in the corresponding sysfs directory. The kobject type contains a field, which is the default property. It is an array of attribute structures. These attributes are responsible for mapping kernel data to files in sysfs.
+		\item Create a new attribute: In some situations, we need to create a kobject instance with special attributes. Therefore, kerbel provides a function sysfs\_create\_file() to create a new attribute for it.
+		\item Remove an attribute: Removing a attribute need the function sysfs\_remove\_file()
+	\end{itemize}
+	\section{Installation Environment}
+	\subsection{Install CentOS7}
+	CentOS stands for Community Enterprise Operating System. CentOS is a Linux distribution which provide a free enterprise-class, community-supported computing platform.
+	\\How to install CentOS7:
+	
+	\begin{enumerate}
+		\item Connect HDMI and insert SD card.
+		\item Insert USB, which includes CentOS 7 64-bit installation file, into the Minnowboard, and power on the Minnowboard.
+		\item After power on, press F2 for few seconds.
+		\item Go to the BIOS menu, choose EFI USB to boot it.
+		\item Choose the install CentOS 7 option to install the operating system.
+		\item Select the language of English
+		\item Choose the install location and set the interface.
+		\item Set the password of the root.
+		\item Set network.
+		\item Begin installation.
+		\item After install the system, restart the operating system, and log in with root account.
+	\end{enumerate}
+	\subsection{Install QEMU}
+	
+	\begin{enumerate}
+		\item yum install qemu
+	\end{enumerate}
+
+	\subsection{Install Linux 4.1.5}
+	Linux 4.1.5 need to install in centOS in Minnowboard.
+	\\How to install Linux:
+	
+	\begin{enumerate}
+		\item Log in with root account.
+		\item Open the terminal.
+		\item Download the Linux 4.1.5 (wget http:// www.kernel.org/pub/linux/kernel/v4.x/linux-4.1.5.tar.xz).
+		\item Decompress the file(xz -d linux-4.1.5.tar.xz,tar -xvf linux-4.1.5.tar)
+		\item Copy MinnowBoard configure file to USB and paste to the Linux root, rename as .config.
+		\item Make menuconfig.
+		\item There will be a Linux/x86 4.1.5 Kernel Configuration on the screen then Choose exit.
+	\end{enumerate}
+	
+	\section{Patch}
+	\subsection{Makefile Patch}
+	\begin{lstlisting}[style=CStyle]
+	--- Linux/arch/x86/kvm/Makefile	2015-08-10 19:22:34.000000000 +0000
+	+++ Linux-modified/arch/x86/kvm/Makefile	2018-06-05 15:23:45.778645231 +0000
+	@@ -20,3 +20,5 @@
+	obj-$(CONFIG_KVM)	+= kvm.o
+	obj-$(CONFIG_KVM_INTEL)	+= kvm-intel.o
+	obj-$(CONFIG_KVM_AMD)	+= kvm-amd.o
+	+
+	+obj-$(CONFIG_VMCS_SYSFS) += vmcs-sysfs.o
+	\end{lstlisting}
+	
+	\subsection{Kconfig Patch}
+	\begin{lstlisting}[style=CStyle]
+	--- Linux/arch/x86/kvm/Kconfig	2015-08-10 19:22:34.000000000 +0000
+	+++ Linux-modified/arch/x86/kvm/Kconfig	2018-06-06 20:52:32.273652419 +0000
+	@@ -96,6 +96,12 @@
+	
+	If unsure, say Y.
+	
+	+config VMCS_SYSFS
+	+	tristate "Sysfs interface to VMCS"
+	+	default m
+	+	---help---
+	+
+	source drivers/vhost/Kconfig
+	
+	\end{lstlisting}
+	
+	\subsection{VMCS Patch}
+	\begin{lstlisting}[style=CStyle]
+	--- Linux-origianl/arch/x86/kvm/vmcs-sysfs.c	1970-01-01 00:00:00.000000000 +0000
+	+++ Linux-modified/arch/x86/kvm/vmcs-sysfs.c	2018-06-06 22:25:39.902355626 +0000
+	@@ -0,0 +1,109 @@
+	+/*********************************
+	+* Group 11
+	+* Oregon State University
+	+* Spring 2018
+	+**********************************/
+	+#include <linux/device.h>
+	+#include <linux/init.h>
+	+#include <linux/kernel.h>
+	+#include <linux/module.h>
+	+#include <linux/stat.h>
+	+#include <linux/string.h>
+	+#include <linux/sysfs.h>
+	+MODULE LICENSE(”GPL”) ;
+	+MODULE AUTHOR ("Group 11") ;
+	+struct kobject kobj;
+	+extern unsigned long vmcs readl(unsigned long field );
+	+extern oid vmcs writel(unsigned long field , unsigned long value);
+	+extern unsigned long get field addr(const char *field );
+	+
+	+struct attribute rip_a = {
+	+  .name = ”g\_rip\_a”,
+	+  .mode = S_IRWXUGO,
+	+};
+	+struct attribute rsp_b = {
+	+  .name = ”g_rsp_b”,
+	+  .mode = S_IRWXUGO,
+	+};
+	+struct attribute cr0_c = {
+	+  .name = ”g_cr0_a”,
+	+  .mode = S_IRWXUGO,
+	+};
+	+struct attribute cr3_c = {
+	+  .name = ”g_cr3_a”,
+	+  .mode = S_IRWXUGO,
+	+};
+	+struct attribute cr4_c = {
+	+  .name = ”g_cr4_a”,
+	+  .mode = S_IRWXUGO,
+	+};
+	+struct attribute G_interuptibility_info = {
+	+  .name = ”guest interuptibility info”,
+	+  .mode = S_IRWXUGO,
+	+    };
+	+
+	+ struct attribute G_rflags = {
+	+   .name = ”guest rflags”,
+	+   .mode = S_IRWXUGO ,
+	+ };
+	+static ssize_t kobj_show ( struct kobject *kobject , struct attribute *attr , char *buf)
+	+{
+	+    ssize_t count;
+	+    unsigned long value ;
+	+    unsigned long field ;
+	+    field = get_field_addr(attr−>name);
+	+    printk (”vmcs: read %ld\n” , field );
+	+    value = vmcs readl(field);
+	+    count = sprintf(buf, ”%ld\n”, value);
+	+    return count;
+	+}
+	+static ssize_t kobj_store(struct kobject *kobject, struct attribute *attr, const char
+	+{
+	+  unsigned long value ;
+	+  unsigned long field ;
+	+  field = get_field_addr(attr−>name);
+	+  value = simple strtoul(buf, NULL, 2);
+	+  printk (”vmcs: write %ld\n” , field );
+	+  vmcs_writel( field , value );
+	+  return count ;
+	+}
+	+static void vmcs_sysfs_release(struct kobject *kobject)
+	+{
+	+  printk(”vmcs: release\n”);
+	+}
+	+static struct attribute * d_abt[] = {
+	+  &rip_a,
+	+  &rsp_b,
+	+  &cr0_c,
+	+  &cr3_c,
+	+  &cr4_c,
+	+  &G_interuptibility_info,
+	+  &G_rflags,
+	+  NULL,
+	+};
+	+static struct sysfs_ops obj_sys_ops = {
+	+  .show = kobj_show,
+	+  .store = kobj_store,
+	+};
+	+struct kobj_type kt =
+	+{
+	+  .release = vmcs_sysfs_release ,
+	+  .sysfs ops =&obj_sys_ops,
+	+  .default_attrs = d_abt,
+	+};
+	+static int init vmcs sysfs module init(void)
+	+{
+	+  int ret ;
+	+  printk(”vmcs: init\n”);
+	+  ret = kobject_init_and_add(&kobj, &ktype, NULL, ”vmcs”);
+	+  return ret ;
+	+}
+	+
+	+static void __exit vmcs_sysfs_module_exit(void)
+	+{
+	+  printk(”vmcs: exit\n”);
+	+  kobject_del(&kobj);
+	+}
+	+
+	+module_init (vmcs_sysfs_module_init);
+	+module_exit (vmcs_sysfs_module_exit);
+	
+	\end{lstlisting}
+	
+	% References
+	\newpage
+	\begin{thebibliography}{5}
+		
+		\bibitem{1}
+		M.Zabaljauregui. (2008). \textit{Hardware Assisted Virtualization Intel Virtualization Technology}. [online] Available at: http://zabaljauregui.com/wp-content/uploads/2016/06/Vtx.pdf. [Accessed 13 June 2018].
+		
+		\bibitem{2}
+		Intel. (2018). \textit{Intel 64 and IA-32 Architectures Software Developer Manuals}. [online] Available at: https://software.intel.com/en-us/articles/intel-sdm [Accessed 13 June 2018].
+		
+		\bibitem{3}
+		Jambit. (n.d.). \textit{SYSFS(5) Linux Programmer's Manual}. [online] Available at: http://man7.org/linux/man-pages/man5/sysfs.5.html [Accessed 13 June 2018].
+		
+		\bibitem{4}
+		P. Mochel. \& M. Murphy. (n.d.). \textit{sysfs - \_The\_ filesystem for exporting kernel objects}. [online] Available at: https://www.kernel.org/doc/Documentation/filesystems/sysfs.txt [Accessed 13 June 2018].
+		
+		\bibitem{5}
+		M. Cezar. (2014). \textit{Installation of CentOS 7.0 with Screenshots.}. [online] Available at: https://www.tecmint.com/centos-7-installation/ [Accessed 13 June 2018].
+		
+	\end{thebibliography}
+	
+\end{document}
+

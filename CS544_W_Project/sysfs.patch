@@ -1,0 +1,112 @@
+--- 1/arch/x86/kvm/vmcs-sysfs.c	1970-01-01 00:00:00.000000000 +0000
++++ 2/arch/x86/kvm/vmcs-sysfs.c	2018-06-06 22:25:39.902355626 +0000
+@@ -0,0 +1,109 @@
++/*********************************
++* Group 11
++* Oregon State University
++* Spring 2018
++**********************************/
++#include <linux/device.h>
++#include <linux/init.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/stat.h>
++#include <linux/string.h>
++#include <linux/sysfs.h>
++MODULE LICENSE(”GPL”) ;
++MODULE AUTHOR ("Group 11") ;
++struct kobject kobj;
++extern unsigned long vmcs readl(unsigned long field );
++extern oid vmcs writel(unsigned long field , unsigned long value);
++extern unsigned long get field addr(const char *field );
++
++struct attribute rip_a = {
++  .name = ”g_rip_a”,
++  .mode = S_IRWXUGO,
++};
++struct attribute rsp_b = {
++  .name = ”g_rsp_b”,
++  .mode = S_IRWXUGO,
++};
++struct attribute cr0_c = {
++  .name = ”g_cr0_a”,
++  .mode = S_IRWXUGO,
++};
++struct attribute cr3_c = {
++  .name = ”g_cr3_a”,
++  .mode = S_IRWXUGO,
++};
++struct attribute cr4_c = {
++  .name = ”g_cr4_a”,
++  .mode = S_IRWXUGO,
++};
++struct attribute G_interuptibility_info = {
++  .name = ”guest interuptibility info”,
++  .mode = S_IRWXUGO,
++    };
++
++ struct attribute G_rflags = {
++   .name = ”guest rflags”,
++   .mode = S_IRWXUGO ,
++ };
++static ssize_t kobj_show ( struct kobject *kobject , struct attribute *attr , char *buf)
++{
++    ssize_t count;
++    unsigned long value ;
++    unsigned long field ;
++    field = get_field_addr(attr−>name);
++    printk (”vmcs: read %ld\n” , field );
++    value = vmcs readl(field);
++    count = sprintf(buf, ”%ld\n”, value);
++    return count;
++}
++static ssize_t kobj_store(struct kobject *kobject, struct attribute *attr, const char
++{
++  unsigned long value ;
++  unsigned long field ;
++  field = get_field_addr(attr−>name);
++  value = simple strtoul(buf, NULL, 2);
++  printk (”vmcs: write %ld\n” , field );
++  vmcs_writel( field , value );
++  return count ;
++}
++static void vmcs_sysfs_release(struct kobject *kobject)
++{
++  printk(”vmcs: release\n”);
++}
++static struct attribute * d_abt[] = {
++  &rip_a,
++  &rsp_b,
++  &cr0_c,
++  &cr3_c,
++  &cr4_c,
++  &G_interuptibility_info,
++  &G_rflags,
++  NULL,
++};
++static struct sysfs_ops obj_sys_ops = {
++  .show = kobj_show,
++  .store = kobj_store,
++};
++struct kobj_type kt =
++{
++  .release = vmcs_sysfs_release ,
++  .sysfs ops =&obj_sys_ops,
++  .default_attrs = d_abt,
++};
++static int init vmcs sysfs module init(void)
++{
++  int ret ;
++  printk(”vmcs: init\n”);
++  ret = kobject_init_and_add(&kobj, &ktype, NULL, ”vmcs”);
++  return ret ;
++}
++
++static void __exit vmcs_sysfs_module_exit(void)
++{
++  printk(”vmcs: exit\n”);
++  kobject_del(&kobj);
++}
++
++module_init (vmcs_sysfs_module_init);
++module_exit (vmcs_sysfs_module_exit);

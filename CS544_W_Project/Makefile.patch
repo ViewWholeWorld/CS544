@@ -1,0 +1,8 @@
+--- 1/arch/x86/kvm/Makefile	2015-08-10 19:22:34.000000000 +0000
++++ 2/arch/x86/kvm/Makefile	2018-06-05 15:23:45.778645231 +0000
+@@ -20,3 +20,5 @@
+ obj-$(CONFIG_KVM)	+= kvm.o
+ obj-$(CONFIG_KVM_INTEL)	+= kvm-intel.o
+ obj-$(CONFIG_KVM_AMD)	+= kvm-amd.o
++
++obj-$(CONFIG_VMCS_SYSFS) += vmcs-sysfs.o

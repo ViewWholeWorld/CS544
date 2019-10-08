@@ -1,0 +1,15 @@
+--- 1/arch/x86/kvm/Kconfig	2015-08-10 19:22:34.000000000 +0000
++++ 2/arch/x86/kvm/Kconfig	2018-06-06 20:52:32.273652419 +0000
+@@ -96,6 +96,12 @@
+ 
+ 	  If unsure, say Y.
+ 
++config VMCS_SYSFS
++	tristate "Sysfs interface to VMCS"
++	default m
++	---help---
++		Provides a sysfs interface to control the VMCS. Also dumps the contents of the VMCS.
++
+ # OK, it's a little counter-intuitive to do this, but it puts it neatly under
+ # the virtualization menu.
+ source drivers/vhost/Kconfig
